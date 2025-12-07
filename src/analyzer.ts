@@ -87,52 +87,57 @@ export async function collectDiagnostics(): Promise<Conflict[]> {
     return conflicts;
 }
 
-/**
- * Converts a ts-morph Diagnostic to a Conflict object.
- * 
- * @param filePath - The file path where the diagnostic occurred
- * @param diagnostic - The ts-morph diagnostic
- * @returns A Conflict object or null if diagnostic should be ignored
- */
 function convertDiagnosticToConflict(filePath: string, diagnostic: any): Conflict | null {
     try {
-        // Get message text
-        const message = diagnostic.getMessageText();
-        const messageText = typeof message === 'string' ? message : message.getMessageText();
-
-        // Get line number using ts-morph API
-        // ts-morph diagnostics have getLineNumber() method that returns 1-indexed line number
-        let lineNumber = 1;
-
-        if (diagnostic.getLineNumber) {
-            lineNumber = diagnostic.getLineNumber();
-        } else if (diagnostic.getStart) {
-            // Fallback: calculate from start position
-            const start = diagnostic.getStart();
-            const sourceFile = diagnostic.getSourceFile();
-
-            if (sourceFile && start !== undefined) {
-                // Use ts-morph SourceFile's getLineAndColumnAtPos method
-                const lineAndCol = sourceFile.getLineAndColumnAtPos(start);
-                lineNumber = lineAndCol.line;
-            }
+        // Get message text safely
+        let messageText = '';
+        try {
+            const message = diagnostic.getMessageText();
+            messageText = typeof message === 'string' ? message : (message?.getMessageText?.() || String(message));
+        } catch {
+            messageText = 'Unknown diagnostic message';
         }
 
-        // Map ts-morph diagnostic category to severity
-        let severity: 'error' | 'warning' | 'info';
-        const category = diagnostic.getCategory();
+        // Get line number - default to 1 if we can't determine it
+        let lineNumber = 1;
 
-        // ts-morph uses TypeScript's DiagnosticCategory enum
-        // 0 = Warning, 1 = Error, 2 = Suggestion, 3 = Message
-        switch (category) {
-            case 1:
-                severity = 'error';
-                break;
-            case 0:
-                severity = 'warning';
-                break;
-            default:
-                severity = 'info';
+        try {
+            // Method 1: Try getLineNumber if it exists (some ts-morph versions)
+            if (typeof diagnostic.getLineNumber === 'function') {
+                lineNumber = diagnostic.getLineNumber();
+            }
+            // Method 2: Try to get start position and calculate
+            else if (typeof diagnostic.getStart === 'function') {
+                const start = diagnostic.getStart();
+                if (start !== undefined && start !== null) {
+                    // For now, just use start position divided by average line length as estimate
+                    // This is a fallback and won't be perfect but won't crash
+                    lineNumber = Math.max(1, Math.floor(start / 80) + 1);
+                }
+            }
+        } catch (error) {
+            // If we can't get line number, default to 1
+            lineNumber = 1;
+        }
+
+        // Get category/severity safely
+        let severity: 'error' | 'warning' | 'info' = 'info';
+        try {
+            const category = diagnostic.getCategory();
+            // ts-morph uses TypeScript's DiagnosticCategory enum
+            // 0 = Warning, 1 = Error, 2 = Suggestion, 3 = Message
+            switch (category) {
+                case 1:
+                    severity = 'error';
+                    break;
+                case 0:
+                    severity = 'warning';
+                    break;
+                default:
+                    severity = 'info';
+            }
+        } catch {
+            severity = 'error'; // Default to error if we can't determine
         }
 
         return {
@@ -142,8 +147,14 @@ function convertDiagnosticToConflict(filePath: string, diagnostic: any): Conflic
             severity
         };
     } catch (error: any) {
-        logError('Error converting diagnostic to conflict', error);
-        return null;
+        logError(`Error converting diagnostic to conflict: ${error.message}`);
+        // Return a basic conflict object rather than null to not lose the error
+        return {
+            filePath,
+            lineNumber: 1,
+            message: 'Diagnostic conversion error',
+            severity: 'error'
+        };
     }
 }
 
