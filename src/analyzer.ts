@@ -4,7 +4,7 @@
 // It provides the core analysis functionality for detecting migration issues.
 
 import { runNgCommand } from './cliRunner';
-import { getProject } from './initializeWorkspace';
+import { getAngularAST } from './initializeWorkspace';
 import { logInfo, logError, logSection } from './logger';
 import { Conflict } from './types';
 
@@ -39,41 +39,21 @@ export async function runAngularUpdate(packages: string[], options: string[] = [
 
 /**
  * Collects TypeScript diagnostics from the workspace after upgrade.
- * Uses ts-morph to get semantic and syntactic diagnostics.
+ * Uses AngularAST to get semantic and syntactic diagnostics.
  * 
  * @returns Promise resolving to an array of Conflict objects
  */
 export async function collectDiagnostics(): Promise<Conflict[]> {
     logSection('Collecting TypeScript Diagnostics');
 
-    const project = getProject();
+    const angularAST = getAngularAST();
 
-    if (!project) {
-        logError('Cannot collect diagnostics: ts-morph Project not initialized');
+    if (!angularAST) {
+        logError('Cannot collect diagnostics: AngularAST not initialized');
         return [];
     }
 
-    const conflicts: Conflict[] = [];
-    const sourceFiles = project.getSourceFiles();
-
-    logInfo(`Analyzing ${sourceFiles.length} TypeScript files...`);
-
-    for (const sourceFile of sourceFiles) {
-        // Skip node_modules files
-        if (sourceFile.getFilePath().includes('node_modules')) {
-            continue;
-        }
-
-        // Get semantic diagnostics (type errors)
-        const semanticDiagnostics = sourceFile.getPreEmitDiagnostics();
-
-        for (const diagnostic of semanticDiagnostics) {
-            const conflict = convertDiagnosticToConflict(sourceFile.getFilePath(), diagnostic);
-            if (conflict) {
-                conflicts.push(conflict);
-            }
-        }
-    }
+    const conflicts = angularAST.getDiagnostics();
 
     logInfo(`Found ${conflicts.length} diagnostic issues`);
 
@@ -85,77 +65,6 @@ export async function collectDiagnostics(): Promise<Conflict[]> {
     logInfo(`Errors: ${errors}, Warnings: ${warnings}, Info: ${infos}`);
 
     return conflicts;
-}
-
-function convertDiagnosticToConflict(filePath: string, diagnostic: any): Conflict | null {
-    try {
-        // Get message text safely
-        let messageText = '';
-        try {
-            const message = diagnostic.getMessageText();
-            messageText = typeof message === 'string' ? message : (message?.getMessageText?.() || String(message));
-        } catch {
-            messageText = 'Unknown diagnostic message';
-        }
-
-        // Get line number - default to 1 if we can't determine it
-        let lineNumber = 1;
-
-        try {
-            // Method 1: Try getLineNumber if it exists (some ts-morph versions)
-            if (typeof diagnostic.getLineNumber === 'function') {
-                lineNumber = diagnostic.getLineNumber();
-            }
-            // Method 2: Try to get start position and calculate
-            else if (typeof diagnostic.getStart === 'function') {
-                const start = diagnostic.getStart();
-                if (start !== undefined && start !== null) {
-                    // For now, just use start position divided by average line length as estimate
-                    // This is a fallback and won't be perfect but won't crash
-                    lineNumber = Math.max(1, Math.floor(start / 80) + 1);
-                }
-            }
-        } catch (error) {
-            // If we can't get line number, default to 1
-            lineNumber = 1;
-        }
-
-        // Get category/severity safely
-        let severity: 'error' | 'warning' | 'info' = 'info';
-        try {
-            const category = diagnostic.getCategory();
-            // ts-morph uses TypeScript's DiagnosticCategory enum
-            // 0 = Warning, 1 = Error, 2 = Suggestion, 3 = Message
-            switch (category) {
-                case 1:
-                    severity = 'error';
-                    break;
-                case 0:
-                    severity = 'warning';
-                    break;
-                default:
-                    severity = 'info';
-            }
-        } catch {
-            severity = 'error'; // Default to error if we can't determine
-        }
-
-        return {
-            filePath,
-            lineNumber,
-            message: messageText,
-            severity
-        };
-    } catch (error: any) {
-        logError(`Error converting diagnostic to conflict: ${error.message}`);
-        // Return a basic conflict object rather than null to not lose the error
-        return {
-            filePath,
-            lineNumber: 1,
-            message: 'Diagnostic conversion error',
-            severity: 'error'
-        };
-    }
 }
 
 /**

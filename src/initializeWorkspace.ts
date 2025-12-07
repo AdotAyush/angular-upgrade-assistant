@@ -6,10 +6,8 @@
 // - Exports the Angular root path and ts-morph Project for use throughout the extension
 
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import { Project } from 'ts-morph';
 import { findAngularProjectRoot } from './projectLocator';
+import { AngularAST } from './ast/AngularAST';
 
 /**
  * Stores the detected Angular project root path.
@@ -18,10 +16,9 @@ import { findAngularProjectRoot } from './projectLocator';
 export let angularRoot: string | null = null;
 
 /**
- * Stores the ts-morph Project instance for TypeScript analysis.
- * Initialized with the Angular project's tsconfig.json.
+ * Stores the AngularAST instance.
  */
-export let project: Project | null = null;
+export let angularAST: AngularAST | null = null;
 
 /**
  * Initializes the workspace by detecting the Angular project root directory
@@ -38,66 +35,40 @@ export let project: Project | null = null;
  * @returns The detected Angular project root path, or null if not found
  */
 export async function initializeWorkspace(): Promise<string | null> {
-    // Get the workspace folders from VS Code
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
-    // Check if a workspace is open
     if (!workspaceFolders || workspaceFolders.length === 0) {
         vscode.window.showErrorMessage(
-            'Angular Upgrade Assistant: No workspace folder is open. Please open a folder containing an Angular project.'
+            'Angular Upgrade Assistant: No workspace folder is open.'
         );
         return null;
     }
 
-    // Get the first workspace folder (primary workspace root)
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
-
-    // Search for the Angular project root
     angularRoot = findAngularProjectRoot(workspaceRoot);
 
-    // Handle the result
     if (angularRoot) {
-        // Success: Angular project found
         const relativePath = angularRoot.replace(workspaceRoot, '').replace(/^[\/\\]/, '') || '(workspace root)';
 
         vscode.window.showInformationMessage(
             `Angular Upgrade Assistant: Angular project detected at "${relativePath}"`
         );
 
-        console.log(`[Angular Upgrade Assistant] Angular project root: ${angularRoot}`);
+        console.log(`[Angular Upgrade Assistant] Angular project root: ${angularRoot} `);
 
-        // Initialize ts-morph Project
-        const tsconfigPath = path.join(angularRoot, 'tsconfig.json');
+        // Initialize AngularAST
+        angularAST = new AngularAST(angularRoot);
+        const success = await angularAST.initialize();
 
-        if (fs.existsSync(tsconfigPath)) {
-            try {
-                project = new Project({
-                    tsConfigFilePath: tsconfigPath
-                });
-
-                // Add source files from tsconfig
-                project.addSourceFilesFromTsConfig(tsconfigPath);
-
-                console.log(`[Angular Upgrade Assistant] ts-morph Project initialized with ${project.getSourceFiles().length} files`);
-            } catch (error) {
-                vscode.window.showWarningMessage(
-                    `Angular Upgrade Assistant: Failed to load TypeScript configuration. ${error}`
-                );
-                console.error('[Angular Upgrade Assistant] ts-morph initialization failed:', error);
-            }
-        } else {
+        if (!success) {
             vscode.window.showWarningMessage(
-                'Angular Upgrade Assistant: tsconfig.json not found in Angular project root.'
+                'Angular Upgrade Assistant: Failed to initialize TypeScript analysis.'
             );
         }
     } else {
-        // Failure: No Angular project found
         vscode.window.showWarningMessage(
-            'Angular Upgrade Assistant: No Angular project found in this workspace. ' +
-            'Please ensure the workspace contains a project with angular.json or package.json with @angular/core.'
+            'Angular Upgrade Assistant: No Angular project found.'
         );
-
-        console.warn('[Angular Upgrade Assistant] No Angular project detected in workspace');
     }
 
     return angularRoot;
@@ -117,6 +88,6 @@ export function getAngularRoot(): string | null {
  * 
  * @returns The ts-morph Project instance, or null if not initialized
  */
-export function getProject(): Project | null {
-    return project;
+export function getAngularAST(): AngularAST | null {
+    return angularAST;
 }

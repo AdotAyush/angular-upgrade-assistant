@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getAngularRoot, getProject } from './initializeWorkspace';
+import { getAngularRoot, getAngularAST } from './initializeWorkspace';
 import { logInfo, logError, logSection } from './logger';
 import { DependencyInfo } from './types';
 
@@ -92,7 +92,9 @@ export async function scanPackageJson(packageJsonPath?: string): Promise<Depende
 export async function scanImports(projectRoot?: string): Promise<Map<string, string[]>> {
     logSection('Scanning Project Imports');
 
-    const project = getProject();
+    const angularAST = getAngularAST();
+    const project = angularAST?.getProject();
+
     if (!project) {
         logError('Cannot scan imports: ts-morph Project not initialized');
         return new Map();

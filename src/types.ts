@@ -19,7 +19,7 @@ export interface Patch {
     diff: string;
     description: string;
     filePath: string;
-    source: 'llm' | 'auto' | 'manual';
+    source: 'llm' | 'auto' | 'manual' | 'pattern';
 }
 
 /**

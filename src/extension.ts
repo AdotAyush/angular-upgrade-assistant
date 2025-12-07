@@ -138,6 +138,8 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
     const { applyPatch } = await import('./patcher');
     const { createMigrationPanel, updateProgress, showPatches, showSummary, waitForPatchApproval } = await import('./ui/webviewPanel');
     const { logInfo, logError, logSection, showLog } = await import('./logger');
+    const { ErrorClusterer } = await import('./errorClustering/ErrorClusterer');
+    const { PatternMatcher } = await import('./errorClustering/PatternMatcher');
     // const { MigrationStep } = await import('./types'); // MigrationStep type is used inline as plain object
 
     logSection('Starting Angular Upgrade Process');
@@ -254,7 +256,6 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
         updateProgress(panel, steps);
 
         if (errors.length === 0) {
-            // No errors - migration successful!
             showSummary(panel, {
                 patchesApplied: 0,
                 errorsFixed: 0,
@@ -264,69 +265,116 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
             return;
         }
 
-        // Step 6: Check LLM availability
-        const llmAvailable = await isLLMAvailable();
-        if (!llmAvailable) {
-            vscode.window.showWarningMessage(
-                'LLM provider not available. Manual fixes will be required.'
-            );
-            showSummary(panel, {
-                patchesApplied: 0,
-                errorsFixed: 0,
-                remainingIssues: errors.length,
-                message: `Migration completed but ${errors.length} errors require manual fixes.`
-            });
-            return;
-        }
-
-        // Step 7: Generate and apply patches
+        // Step 6: Cluster Errors (Tier 1 Preparation)
         steps.push({
-            id: 'patches',
-            name: 'Generate Patches',
+            id: 'clustering',
+            name: 'Cluster Errors',
             status: 'in-progress',
-            description: 'Generating patches using LLM...'
+            description: 'Grouping similar errors...'
         });
         updateProgress(panel, steps);
 
-        let patchesApplied = 0;
-        const maxPatchesPerRun = config.get<number>('maxPatchesPerRun', 10);
-        const maxPatches = Math.min(errors.length, maxPatchesPerRun);
+        const clusterer = new ErrorClusterer();
+        const clusters = clusterer.clusterErrors(errors);
 
-        logInfo(`Will generate up to ${maxPatches} patches for ${errors.length} errors`);
+        logInfo(`Grouped ${errors.length} errors into ${clusters.length} clusters`);
 
-        for (let i = 0; i < maxPatches; i++) {
-            const error = errors[i];
+        steps[steps.length - 1].status = 'completed';
+        steps[steps.length - 1].description = `Grouped into ${clusters.length} patterns`;
+        updateProgress(panel, steps);
 
-            // Get documentation context
-            const docs = await consolidateDocs('@angular/core', currentVersion || '18.0.0', '19.0.0');
+        // Step 7: Apply Tier 1 Fixes (Pattern Matching)
+        steps.push({
+            id: 'tier1-fixes',
+            name: 'Apply Pattern Fixes (Tier 1)',
+            status: 'in-progress',
+            description: 'Applying known pattern fixes...'
+        });
+        updateProgress(panel, steps);
 
-            // Get code snippet (simplified - would need to read actual file)
-            const codeSnippet = `// Error at ${error.filePath}:${error.lineNumber}`;
+        const patternMatcher = new PatternMatcher();
+        let tier1PatchesApplied = 0;
+        const remainingClusters = [];
 
-            // Generate patches
-            const patches = await generatePatchSuggestions(error.message, codeSnippet, docs);
+        for (const cluster of clusters) {
+            const pattern = patternMatcher.matchPattern(cluster);
 
-            if (patches.length > 0) {
-                // Show patches to user
-                showPatches(panel, patches);
+            if (pattern) {
+                logInfo(`Cluster ${cluster.id} matches pattern: ${pattern.name}`);
+                const patches = patternMatcher.generateFixes(cluster, pattern);
 
-                // Wait for user approval
-                const approved = await waitForPatchApproval(0);
+                if (patches.length > 0) {
+                    // Show patches to user for approval (batch approval for patterns)
+                    showPatches(panel, patches);
+                    const approved = await waitForPatchApproval(0);
 
-                if (approved && patches[0].filePath !== 'unknown') {
-                    const success = await applyPatch(patches[0].filePath, patches[0]);
-                    if (success) {
-                        patchesApplied++;
+                    if (approved) {
+                        for (const patch of patches) {
+                            const success = await applyPatch(patch.filePath, patch);
+                            if (success) tier1PatchesApplied++;
+                        }
                     }
                 }
+            } else {
+                remainingClusters.push(cluster);
             }
         }
 
         steps[steps.length - 1].status = 'completed';
-        steps[steps.length - 1].description = `Applied ${patchesApplied} patches`;
+        steps[steps.length - 1].description = `Applied ${tier1PatchesApplied} pattern fixes`;
         updateProgress(panel, steps);
 
-        // Step 8: Verify build
+        // Step 8: Apply Tier 2 Fixes (LLM)
+        if (remainingClusters.length > 0) {
+            steps.push({
+                id: 'tier2-fixes',
+                name: 'Apply LLM Fixes (Tier 2)',
+                status: 'in-progress',
+                description: 'Generating AI fixes for complex errors...'
+            });
+            updateProgress(panel, steps);
+
+            const llmAvailable = await isLLMAvailable();
+            if (!llmAvailable) {
+                vscode.window.showWarningMessage('LLM not available. Skipping Tier 2 fixes.');
+            } else {
+                let tier2PatchesApplied = 0;
+                const maxPatchesPerRun = config.get<number>('maxPatchesPerRun', 10);
+                let patchesGenerated = 0;
+
+                for (const cluster of remainingClusters) {
+                    if (patchesGenerated >= maxPatchesPerRun) break;
+
+                    // Use the representative error for LLM context
+                    const error = cluster.representative;
+                    const docs = await consolidateDocs('@angular/core', currentVersion || '18.0.0', '19.0.0');
+                    const codeSnippet = `// Error at ${error.filePath}:${error.lineNumber}\n// Message: ${error.message}`;
+
+                    const patches = await generatePatchSuggestions(error.message, codeSnippet, docs);
+
+                    if (patches.length > 0) {
+                        // Apply to all instances in cluster if possible, or just the representative
+                        // For now, let's just apply to the representative to be safe
+                        showPatches(panel, patches);
+                        const approved = await waitForPatchApproval(0);
+
+                        if (approved && patches[0].filePath !== 'unknown') {
+                            const success = await applyPatch(patches[0].filePath, patches[0]);
+                            if (success) {
+                                tier2PatchesApplied++;
+                                patchesGenerated++;
+                            }
+                        }
+                    }
+                }
+
+                steps[steps.length - 1].description = `Applied ${tier2PatchesApplied} AI fixes`;
+            }
+            steps[steps.length - 1].status = 'completed';
+            updateProgress(panel, steps);
+        }
+
+        // Step 9: Verify Build
         steps.push({
             id: 'verify',
             name: 'Verify Build',
@@ -345,7 +393,7 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
 
         // Show final summary
         showSummary(panel, {
-            patchesApplied,
+            patchesApplied: tier1PatchesApplied + (steps.find(s => s.id === 'tier2-fixes')?.description.match(/(\d+)/)?.[1] || 0),
             errorsFixed: errors.length - remainingErrorCount,
             remainingIssues: remainingErrorCount,
             message: buildSuccess
