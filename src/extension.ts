@@ -24,8 +24,12 @@ export async function activate(context: vscode.ExtensionContext) {
     initializeLogger();
     logInfo('Angular Upgrade Assistant extension activated');
 
-    // Register the main command
-    const disposable = vscode.commands.registerCommand('angularUpgrade.start', async () => {
+    // Load LLM configuration from settings
+    const { loadLLMConfigFromSettings } = await import('./llmClient');
+    loadLLMConfigFromSettings();
+
+    // Register the main migration command
+    const startCommand = vscode.commands.registerCommand('angularUpgrade.start', async () => {
         try {
             // Initialize workspace and detect Angular project
             logSection('Initializing Workspace');
@@ -52,7 +56,54 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(disposable);
+    // Register the configuration command
+    const configureCommand = vscode.commands.registerCommand('angularUpgrade.configure', async () => {
+        const config = vscode.workspace.getConfiguration('angularUpgrade');
+        const currentProvider = config.get('llmProvider', 'copilot');
+
+        const provider = await vscode.window.showQuickPick(
+            [
+                { label: 'GitHub Copilot', value: 'copilot', description: 'Use GitHub Copilot (requires extension)' },
+                { label: 'OpenAI', value: 'openai', description: 'Use OpenAI GPT (requires API key)' },
+                { label: 'Google Gemini', value: 'gemini', description: 'Use Google Gemini (requires API key)' },
+                { label: 'AWS Bedrock', value: 'bedrock', description: 'Use AWS Bedrock (requires AWS credentials)' },
+                { label: 'None', value: 'none', description: 'Disable LLM patch generation' }
+            ],
+            {
+                placeHolder: `Current: ${currentProvider}. Select LLM provider:`,
+                title: 'Configure LLM Provider'
+            }
+        );
+
+        if (provider) {
+            await config.update('llmProvider', provider.value, vscode.ConfigurationTarget.Global);
+
+            // Prompt for API key if needed
+            if (provider.value === 'openai') {
+                const apiKey = await vscode.window.showInputBox({
+                    prompt: 'Enter your OpenAI API key',
+                    password: true,
+                    placeHolder: 'sk-...'
+                });
+                if (apiKey) {
+                    await config.update('openaiApiKey', apiKey, vscode.ConfigurationTarget.Global);
+                }
+            } else if (provider.value === 'gemini') {
+                const apiKey = await vscode.window.showInputBox({
+                    prompt: 'Enter your Google Gemini API key',
+                    password: true
+                });
+                if (apiKey) {
+                    await config.update('geminiApiKey', apiKey, vscode.ConfigurationTarget.Global);
+                }
+            }
+
+            vscode.window.showInformationMessage(`LLM provider set to: ${provider.label}`);
+            loadLLMConfigFromSettings();
+        }
+    });
+
+    context.subscriptions.push(startCommand, configureCommand);
 }
 
 /**
@@ -170,10 +221,16 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
         });
         updateProgress(panel, steps);
 
+        // Get packages to update from settings (configurable)
+        const config = vscode.workspace.getConfiguration('angularUpgrade');
+        const packagesToUpdate = config.get<string[]>('packagesToUpdate', ['@angular/cli', '@angular/core']);
+
+        logInfo(`Packages to update: ${packagesToUpdate.join(', ')}`);
+
         try {
-            await runAngularUpdate(['@angular/cli', '@angular/core'], ['--force']);
+            await runAngularUpdate(packagesToUpdate, ['--force']);
             steps[steps.length - 1].status = 'completed';
-            steps[steps.length - 1].description = 'Angular packages updated';
+            steps[steps.length - 1].description = `Updated: ${packagesToUpdate.join(', ')}`;
         } catch (error: any) {
             steps[steps.length - 1].status = 'completed';
             steps[steps.length - 1].description = 'Update completed with warnings';
@@ -232,7 +289,10 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
         updateProgress(panel, steps);
 
         let patchesApplied = 0;
-        const maxPatches = Math.min(errors.length, 10); // Limit to 10 patches
+        const maxPatchesPerRun = config.get<number>('maxPatchesPerRun', 10);
+        const maxPatches = Math.min(errors.length, maxPatchesPerRun);
+
+        logInfo(`Will generate up to ${maxPatches} patches for ${errors.length} errors`);
 
         for (let i = 0; i < maxPatches; i++) {
             const error = errors[i];

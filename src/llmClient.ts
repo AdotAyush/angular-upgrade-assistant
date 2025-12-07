@@ -11,18 +11,40 @@ import { Patch } from './types';
  * Configuration for LLM provider
  */
 interface LLMConfig {
-    provider: 'copilot' | 'gemini' | 'openai';
+    provider: 'copilot' | 'gemini' | 'openai' | 'bedrock' | 'none';
     apiKey?: string;
     model?: string;
+    bedrockRegion?: string;
+    bedrockModelId?: string;
+    enableMockMode?: boolean;
 }
 
-// Default configuration
+// Default configuration - will be loaded from VS Code settings
 let llmConfig: LLMConfig = {
-    provider: 'copilot'
+    provider: 'copilot',
+    enableMockMode: true
 };
 
 /**
- * Sets the LLM configuration.
+ * Loads LLM configuration from VS Code settings.
+ */
+export function loadLLMConfigFromSettings(): void {
+    const config = vscode.workspace.getConfiguration('angularUpgrade');
+
+    llmConfig = {
+        provider: config.get('llmProvider', 'copilot') as any,
+        apiKey: config.get('openaiApiKey') || config.get('geminiApiKey'),
+        model: config.get('openaiModel') || config.get('geminiModel'),
+        bedrockRegion: config.get('bedrockRegion', 'us-east-1'),
+        bedrockModelId: config.get('bedrockModelId', 'anthropic.claude-3-5-sonnet-20241022-v2:0'),
+        enableMockMode: config.get('enableMockMode', true)
+    };
+
+    logInfo(`LLM provider loaded from settings: ${llmConfig.provider}`);
+}
+
+/**
+ * Sets the LLM configuration (programmatically).
  * 
  * @param config - LLM configuration object
  */
@@ -41,6 +63,11 @@ export async function queryLLM(prompt: string): Promise<string> {
     logInfo(`Querying LLM (${llmConfig.provider})...`);
 
     try {
+        // Load config from settings if not already loaded
+        if (!llmConfig.apiKey && llmConfig.provider !== 'copilot') {
+            loadLLMConfigFromSettings();
+        }
+
         switch (llmConfig.provider) {
             case 'copilot':
                 return await queryCopilot(prompt);
@@ -50,6 +77,13 @@ export async function queryLLM(prompt: string): Promise<string> {
 
             case 'openai':
                 return await queryOpenAI(prompt);
+
+            case 'bedrock':
+                return await queryBedrock(prompt);
+
+            case 'none':
+                logInfo('LLM provider set to none - skipping');
+                throw new Error('LLM provider disabled');
 
             default:
                 throw new Error(`Unsupported LLM provider: ${llmConfig.provider}`);
@@ -149,8 +183,10 @@ async function queryGemini(prompt: string): Promise<string> {
  * @returns Promise resolving to OpenAI's response
  */
 async function queryOpenAI(prompt: string): Promise<string> {
+    loadLLMConfigFromSettings();
+
     if (!llmConfig.apiKey) {
-        throw new Error('OpenAI API key not configured');
+        throw new Error('OpenAI API key not configured. Set angularUpgrade.openaiApiKey in settings');
     }
 
     const apiKey = llmConfig.apiKey;
@@ -158,16 +194,110 @@ async function queryOpenAI(prompt: string): Promise<string> {
 
     logInfo(`Querying OpenAI (${model})...`);
 
-    // TODO: Implement actual OpenAI API call
-    // Example structure:
-    // const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-    //     model: model,
-    //     messages: [{ role: 'user', content: prompt }]
-    // }, {
-    //     headers: { 'Authorization': `Bearer ${apiKey}` }
-    // });
+    const axios = (await import('axios')).default;
 
-    throw new Error('OpenAI API integration not yet implemented');
+    try {
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7
+        }, {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const result = response.data.choices[0].message.content;
+        logInfo('Received response from OpenAI');
+        return result;
+
+    } catch (error: any) {
+        logError('OpenAI API call failed', error);
+        throw new Error(`OpenAI API error: ${error.message}`);
+    }
+}
+
+/**
+ * Queries AWS Bedrock API.
+ * 
+ * @param prompt - The prompt to send
+ * @returns Promise resolving to Bedrock's response
+ */
+async function queryBedrock(prompt: string): Promise<string> {
+    loadLLMConfigFromSettings();
+
+    const region = llmConfig.bedrockRegion || 'us-east-1';
+    const modelId = llmConfig.bedrockModelId || 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+
+    logInfo(`Querying AWS Bedrock (${modelId}) in region ${region}...`);
+
+    try {
+        // Dynamically import AWS SDK
+        // @ts-ignore - AWS SDK is optional dependency
+        const { BedrockRuntimeClient, InvokeModelCommand } = await import('@aws-sdk/client-bedrock-runtime');
+
+        const client = new BedrockRuntimeClient({ region });
+
+        // Prepare request based on model family
+        let requestBody: any;
+
+        if (modelId.startsWith('anthropic.claude')) {
+            // Claude format
+            requestBody = {
+                anthropic_version: "bedrock-2023-05-31",
+                max_tokens: 4096,
+                messages: [
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ]
+            };
+        } else if (modelId.startsWith('meta.llama')) {
+            // Llama format
+            requestBody = {
+                prompt: prompt,
+                max_gen_len: 2048,
+                temperature: 0.7
+            };
+        } else {
+            throw new Error(`Unsupported Bedrock model: ${modelId}`);
+        }
+
+        const command = new InvokeModelCommand({
+            modelId,
+            contentType: 'application/json',
+            body: JSON.stringify(requestBody)
+        });
+
+        const response = await client.send(command);
+        const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+
+        // Extract response based on model family
+        let result: string;
+        if (modelId.startsWith('anthropic.claude')) {
+            result = responseBody.content[0].text;
+        } else if (modelId.startsWith('meta.llama')) {
+            result = responseBody.generation;
+        } else {
+            result = JSON.stringify(responseBody);
+        }
+
+        logInfo('Received response from AWS Bedrock');
+        return result;
+
+    } catch (error: any) {
+        logError('AWS Bedrock API call failed', error);
+
+        if (error.name === 'AccessDeniedException') {
+            throw new Error('AWS Bedrock access denied. Please configure AWS credentials.');
+        } else if (error.code === 'MODULE_NOT_FOUND') {
+            throw new Error('AWS SDK not installed. Run: npm install @aws-sdk/client-bedrock-runtime');
+        }
+
+        throw new Error(`Bedrock API error: ${error.message}`);
+    }
 }
 
 /**
@@ -347,6 +477,9 @@ Keep the explanation concise and practical.`;
  * @returns Promise resolving to true if LLM is available
  */
 export async function isLLMAvailable(): Promise<boolean> {
+    // Load settings first
+    loadLLMConfigFromSettings();
+
     switch (llmConfig.provider) {
         case 'copilot':
             // Check if Copilot extension is installed (don't require it to be active)
@@ -357,20 +490,69 @@ export async function isLLMAvailable(): Promise<boolean> {
             // @ts-ignore
             const hasLMAPI = typeof vscode.lm !== 'undefined';
 
-            // Return true if either Copilot is installed OR we're in mock mode for testing
             if (copilotExt || hasLMAPI) {
-                logInfo('LLM available: Copilot extension found or Language Model API available');
+                logInfo('✓ LLM available: Copilot extension found or Language Model API available');
                 return true;
             }
 
-            // Even if not available, return true to enable mock/testing mode
-            logInfo('LLM not found, but enabling fallback mock mode for testing');
-            return true; // Allow mock responses for testing
+            // Check if mock mode is enabled
+            if (llmConfig.enableMockMode) {
+                logInfo('⚠ Copilot not found - enabling fallback mock mode for testing');
+                vscode.window.showWarningMessage(
+                    'GitHub Copilot not detected. Using mock mode for demonstration. Configure a real LLM provider in settings for actual patch generation.',
+                    'Open Settings'
+                ).then(selection => {
+                    if (selection === 'Open Settings') {
+                        vscode.commands.executeCommand('workbench.action.openSettings', 'angularUpgrade');
+                    }
+                });
+                return true; // Allow mock responses
+            }
+
+            logError('Copilot not available and mock mode disabled');
+            return false;
 
         case 'gemini':
+            if (llmConfig.apiKey) {
+                logInfo('✓ LLM available: Gemini API key configured');
+                return true;
+            }
+            logError('Gemini API key not configured');
+            vscode.window.showErrorMessage('Gemini API key not configured. Set angularUpgrade.geminiApiKey in settings.');
+            return false;
+
         case 'openai':
-            // Check if API key is configured
-            return !!llmConfig.apiKey;
+            if (llmConfig.apiKey) {
+                logInfo('✓ LLM available: OpenAI API key configured');
+                return true;
+            }
+            logError('OpenAI API key not configured');
+            vscode.window.showErrorMessage('OpenAI API key not configured. Set angularUpgrade.openaiApiKey in settings.');
+            return false;
+
+        case 'bedrock':
+            // For Bedrock, we check if AWS SDK is available
+            try {
+                // @ts-ignore - AWS SDK is optional dependency
+                await import('@aws-sdk/client-bedrock-runtime');
+                logInfo('✓ LLM available: AWS Bedrock SDK found');
+                return true;
+            } catch {
+                logError('AWS Bedrock SDK not installed');
+                vscode.window.showErrorMessage(
+                    'AWS Bedrock SDK not installed. Run: npm install @aws-sdk/client-bedrock-runtime',
+                    'Install Now'
+                ).then(selection => {
+                    if (selection === 'Install Now') {
+                        vscode.window.showInformationMessage('Please run: npm install @aws-sdk/client-bedrock-runtime in your terminal');
+                    }
+                });
+                return false;
+            }
+
+        case 'none':
+            logInfo('LLM provider set to none - skipping patch generation');
+            return false;
 
         default:
             return false;
@@ -380,9 +562,20 @@ export async function isLLMAvailable(): Promise<boolean> {
 /**
  * Generates a mock patch response for testing when LLM is not available.
  * This allows the extension to run and demonstrate functionality.
+ * Shows a warning to the user that mock mode is active.
  */
 function generateMockPatchResponse(prompt: string): string {
-    logInfo('Generating mock LLM response for testing');
+    logInfo('⚠ Generating mock LLM response for demonstration purposes');
+
+    // Show warning message to user
+    vscode.window.showWarningMessage(
+        '⚠️ MOCK MODE: Generating demonstration patches only. Configure a real LLM provider (Copilot/OpenAI/Gemini/Bedrock) for actual code fixes.',
+        'Configure Now'
+    ).then(selection => {
+        if (selection === 'Configure Now') {
+            vscode.commands.executeCommand('angularUpgrade.configure');
+        }
+    });
 
     // Extract error context if present
     const errorMatch = prompt.match(/## Error Message[\s\S]*?```\n([\s\S]*?)```/);
@@ -395,10 +588,10 @@ function generateMockPatchResponse(prompt: string): string {
                 diff: `--- a/example.ts
 +++ b/example.ts
 @@ -1,3 +1,3 @@
- // Mock patch generated for testing
--// This is a placeholder patch
-+// Real LLM integration required for actual fixes`,
-                description: `Mock patch: Would fix "${error.substring(0, 50)}..." - Configure real LLM provider for actual patches`,
+ // ⚠️ MOCK PATCH - This is a demonstration only
+-// Configure a real LLM provider for actual fixes
++// Real patches require Copilot, OpenAI, Gemini, or Bedrock`,
+                description: `⚠️ MOCK: Would address "${error.substring(0, 80)}..." - This is a demonstration. Configure angularUpgrade.llmProvider in settings for real patches.`,
                 filePath: 'unknown'
             }
         ]
