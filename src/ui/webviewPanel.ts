@@ -305,7 +305,7 @@ function getWebviewContent(): string {
         <div id="summaryContent"></div>
         <div style="margin-top: 20px;">
             <button class="btn-primary" onclick="retryMigration()">Run Again</button>
-            <button class="btn-secondary" onclick="close()">Close</button>
+            <button class="btn-secondary" onclick="closePanel()">Close</button>
         </div>
     </div>
     
@@ -417,7 +417,7 @@ function getWebviewContent(): string {
             vscode.postMessage({ command: 'retryMigration' });
         }
         
-        function close() {
+        function closePanel() {
             vscode.postMessage({ command: 'cancelMigration' });
         }
     </script>

@@ -35,6 +35,7 @@
                         "openai",
                         "gemini",
                         "bedrock",
+                        "groq",
                         "none"
                     ],
                     "default": "copilot",
@@ -44,6 +45,7 @@
                         "OpenAI GPT (requires API key)",
                         "Google Gemini (requires API key)",
                         "AWS Bedrock (requires AWS credentials)",
+                        "Groq (requires API key)",
                         "None - skip LLM patch generation"
                     ]
                 },
@@ -94,6 +96,23 @@
                         "meta.llama3-70b-instruct-v1:0"
                     ],
                     "description": "AWS Bedrock model ID to use"
+                },
+                "angularUpgrade.groqApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Groq API key",
+                    "markdownDescription": "Groq API key. Get one at [console.groq.com](https://console.groq.com/keys)"
+                },
+                "angularUpgrade.groqModel": {
+                    "type": "string",
+                    "default": "llama3-70b-8192",
+                    "enum": [
+                        "llama3-70b-8192",
+                        "llama3-8b-8192",
+                        "mixtral-8x7b-32768",
+                        "gemma-7b-it"
+                    ],
+                    "description": "Groq model to use"
                 },
                 "angularUpgrade.packagesToUpdate": {
                     "type": "array",

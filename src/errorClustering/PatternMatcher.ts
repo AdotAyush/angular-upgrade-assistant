@@ -22,7 +22,10 @@ export class PatternMatcher {
             id: 'http-module-deprecation',
             name: 'HttpModule Deprecation',
             description: 'Replaces deprecated HttpModule with HttpClientModule',
-            check: (conflict) => conflict.message.includes('HttpModule') && conflict.message.includes('deprecated'),
+            check: (conflict) => {
+                return (conflict.message.includes('HttpModule') && conflict.message.includes('deprecated')) ||
+                    (conflict.message.includes('HttpModule') && conflict.message.includes('has no exported member'));
+            },
             fix: (conflict) => {
                 return {
                     diff: `
@@ -36,20 +39,48 @@ export class PatternMatcher {
             }
         });
 
-        // Pattern 2: RxJS Operators
+        // Pattern 2: RxJS Operators (switch to pipeable operators)
         this.patterns.push({
             id: 'rxjs-operators',
             name: 'RxJS Operators',
             description: 'Fixes old RxJS operator imports',
             check: (conflict) => conflict.message.includes('rxjs') && conflict.message.includes('has no exported member'),
             fix: (conflict) => {
-                // This is a simplified example. Real implementation would need AST analysis to know exactly what to replace.
-                // For now, we return null to indicate we can't auto-fix this with simple regex reliably without more context.
+                // Heuristic: if it's an import error for a common operator
+                if (conflict.message.includes('map') || conflict.message.includes('switchMap') || conflict.message.includes('tap')) {
+                    return {
+                        diff: `
+- import 'rxjs/add/operator/map';
++ import { map } from 'rxjs/operators';
+`,
+                        description: 'Update RxJS operator import',
+                        filePath: conflict.filePath,
+                        source: 'pattern'
+                    };
+                }
                 return null;
             }
         });
 
-        // Add more Angular-specific patterns here
+        // Pattern 3: entryComponents removal (Angular 13+ but common legacy)
+        this.patterns.push({
+            id: 'entry-components',
+            name: 'Remove entryComponents',
+            description: 'Removes deprecated entryComponents property',
+            check: (conflict) => conflict.message.includes('entryComponents') && conflict.message.includes('does not exist'),
+            fix: (conflict) => {
+                return {
+                    diff: `
+- entryComponents: [
+-   MyComponent
+- ],
+`,
+                    description: 'Remove deprecated entryComponents',
+                    filePath: conflict.filePath,
+                    source: 'pattern'
+                };
+            }
+        });
     }
 
     /**

@@ -67,6 +67,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 { label: 'OpenAI', value: 'openai', description: 'Use OpenAI GPT (requires API key)' },
                 { label: 'Google Gemini', value: 'gemini', description: 'Use Google Gemini (requires API key)' },
                 { label: 'AWS Bedrock', value: 'bedrock', description: 'Use AWS Bedrock (requires AWS credentials)' },
+                { label: 'Groq', value: 'groq', description: 'Use Groq (requires API key)' },
                 { label: 'None', value: 'none', description: 'Disable LLM patch generation' }
             ],
             {
@@ -95,6 +96,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 if (apiKey) {
                     await config.update('geminiApiKey', apiKey, vscode.ConfigurationTarget.Global);
+                }
+            } else if (provider.value === 'groq') {
+                const apiKey = await vscode.window.showInputBox({
+                    prompt: 'Enter your Groq API key',
+                    password: true,
+                    placeHolder: 'gsk_...'
+                });
+                if (apiKey) {
+                    await config.update('groqApiKey', apiKey, vscode.ConfigurationTarget.Global);
                 }
             }
 

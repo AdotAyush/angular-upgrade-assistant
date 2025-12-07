@@ -11,11 +11,13 @@ import { Patch } from './types';
  * Configuration for LLM provider
  */
 interface LLMConfig {
-    provider: 'copilot' | 'gemini' | 'openai' | 'bedrock' | 'none';
+    provider: 'copilot' | 'gemini' | 'openai' | 'bedrock' | 'groq' | 'none';
     apiKey?: string;
     model?: string;
     bedrockRegion?: string;
     bedrockModelId?: string;
+    groqApiKey?: string;
+    groqModel?: string;
     enableMockMode?: boolean;
 }
 
@@ -37,6 +39,8 @@ export function loadLLMConfigFromSettings(): void {
         model: config.get('openaiModel') || config.get('geminiModel'),
         bedrockRegion: config.get('bedrockRegion', 'us-east-1'),
         bedrockModelId: config.get('bedrockModelId', 'anthropic.claude-3-5-sonnet-20241022-v2:0'),
+        groqApiKey: config.get('groqApiKey'),
+        groqModel: config.get('groqModel', 'llama3-70b-8192'),
         enableMockMode: config.get('enableMockMode', true)
     };
 
@@ -80,6 +84,9 @@ export async function queryLLM(prompt: string): Promise<string> {
 
             case 'bedrock':
                 return await queryBedrock(prompt);
+
+            case 'groq':
+                return await queryGroq(prompt);
 
             case 'none':
                 logInfo('LLM provider set to none - skipping');
@@ -297,6 +304,48 @@ async function queryBedrock(prompt: string): Promise<string> {
         }
 
         throw new Error(`Bedrock API error: ${error.message}`);
+    }
+}
+
+/**
+ * Queries Groq API.
+ * 
+ * @param prompt - The prompt to send
+ * @returns Promise resolving to Groq's response
+ */
+async function queryGroq(prompt: string): Promise<string> {
+    loadLLMConfigFromSettings();
+
+    if (!llmConfig.groqApiKey) {
+        throw new Error('Groq API key not configured. Set angularUpgrade.groqApiKey in settings');
+    }
+
+    const apiKey = llmConfig.groqApiKey;
+    const model = llmConfig.groqModel || 'llama3-70b-8192';
+
+    logInfo(`Querying Groq (${model})...`);
+
+    const axios = (await import('axios')).default;
+
+    try {
+        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+            model: model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7
+        }, {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const result = response.data.choices[0].message.content;
+        logInfo('Received response from Groq');
+        return result;
+
+    } catch (error: any) {
+        logError('Groq API call failed', error);
+        throw new Error(`Groq API error: ${error.message}`);
     }
 }
 
@@ -549,6 +598,15 @@ export async function isLLMAvailable(): Promise<boolean> {
                 });
                 return false;
             }
+
+        case 'groq':
+            if (llmConfig.groqApiKey) {
+                logInfo('✓ LLM available: Groq API key configured');
+                return true;
+            }
+            logError('Groq API key not configured');
+            vscode.window.showErrorMessage('Groq API key not configured. Set angularUpgrade.groqApiKey in settings.');
+            return false;
 
         case 'none':
             logInfo('LLM provider set to none - skipping patch generation');
