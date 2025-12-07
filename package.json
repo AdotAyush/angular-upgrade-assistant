@@ -1,0 +1,40 @@
+{
+    "name": "angular-upgrade-assistant",
+    "displayName": "Angular Upgrade Assistant",
+    "description": "Assists with Angular version upgrades by analyzing, patching, and documenting migration steps",
+    "version": "0.0.1",
+    "publisher": "your-publisher-name",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onCommand:angularUpgrade.start"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "angularUpgrade.start",
+                "title": "Angular Upgrade: Start Migration"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@types/vscode": "^1.80.0",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "ts-morph": "^21.0.0",
+        "axios": "^1.6.0"
+    }
+}
