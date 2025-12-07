@@ -38,9 +38,9 @@ export function loadLLMConfigFromSettings(): void {
         apiKey: config.get('openaiApiKey') || config.get('geminiApiKey'),
         model: config.get('openaiModel') || config.get('geminiModel'),
         bedrockRegion: config.get('bedrockRegion', 'us-east-1'),
-        bedrockModelId: config.get('bedrockModelId', 'anthropic.claude-3-5-sonnet-20241022-v2:0'),
+        bedrockModelId: config.get('bedrockModelId', 'anthropic.claude-3-5-sonnet-20240620-v1:0'),
         groqApiKey: config.get('groqApiKey'),
-        groqModel: config.get('groqModel', 'llama3-70b-8192'),
+        groqModel: config.get('groqModel', 'llama-3.3-70b-versatile'),
         enableMockMode: config.get('enableMockMode', true)
     };
 
@@ -197,7 +197,7 @@ async function queryOpenAI(prompt: string): Promise<string> {
     }
 
     const apiKey = llmConfig.apiKey;
-    const model = llmConfig.model || 'gpt-4';
+    const model = llmConfig.model || 'gpt-4o';
 
     logInfo(`Querying OpenAI (${model})...`);
 
@@ -235,7 +235,7 @@ async function queryBedrock(prompt: string): Promise<string> {
     loadLLMConfigFromSettings();
 
     const region = llmConfig.bedrockRegion || 'us-east-1';
-    const modelId = llmConfig.bedrockModelId || 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+    const modelId = llmConfig.bedrockModelId || 'anthropic.claude-3-5-sonnet-20240620-v1:0';
 
     logInfo(`Querying AWS Bedrock (${modelId}) in region ${region}...`);
 
@@ -321,7 +321,7 @@ async function queryGroq(prompt: string): Promise<string> {
     }
 
     const apiKey = llmConfig.groqApiKey;
-    const model = llmConfig.groqModel || 'llama3-70b-8192';
+    const model = llmConfig.groqModel || 'llama-3.3-70b-versatile';
 
     logInfo(`Querying Groq (${model})...`);
 

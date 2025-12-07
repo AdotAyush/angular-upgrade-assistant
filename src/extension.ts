@@ -11,6 +11,7 @@
 import * as vscode from 'vscode';
 import { initializeWorkspace } from './initializeWorkspace';
 import { initializeLogger, logSection, logInfo } from './logger';
+import * as path from 'path';
 
 /**
  * Called when the extension is activated (first time command is executed).
@@ -46,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext) {
             logInfo(`Angular project root: ${angularRoot}`);
 
             // Start the upgrade process
-            await startUpgradeProcess(context);
+            await startUpgradeProcess(context, angularRoot);
 
         } catch (error: any) {
             vscode.window.showErrorMessage(
@@ -139,7 +140,7 @@ export function deactivate() {
  * 
  * TODO: Implement the actual upgrade workflow
  */
-async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<void> {
+async function startUpgradeProcess(context: vscode.ExtensionContext, angularRoot: string): Promise<void> {
     const { isGitRepository, createMigrationBranch, createCheckpoint } = await import('./gitUtils');
     const { getCurrentAngularVersion, scanPackageJson, identifyAngularPackages } = await import('./dependencyScanner');
     const { runAngularUpdate, collectDiagnostics, verifyBuild } = await import('./analyzer');
@@ -368,11 +369,22 @@ async function startUpgradeProcess(context: vscode.ExtensionContext): Promise<vo
                         showPatches(panel, patches);
                         const approved = await waitForPatchApproval(0);
 
-                        if (approved && patches[0].filePath !== 'unknown') {
-                            const success = await applyPatch(patches[0].filePath, patches[0]);
-                            if (success) {
-                                tier2PatchesApplied++;
-                                patchesGenerated++;
+                        if (approved) {
+                            for (const patch of patches) {
+                                // Resolve relative paths from LLM
+                                let targetPath = patch.filePath;
+                                if (!path.isAbsolute(targetPath) && angularRoot) {
+                                    targetPath = path.join(angularRoot, targetPath);
+                                }
+
+                                // Update patch object with absolute path
+                                patch.filePath = targetPath;
+
+                                const success = await applyPatch(targetPath, patch);
+                                if (success) {
+                                    tier2PatchesApplied++;
+                                    patchesGenerated++;
+                                }
                             }
                         }
                     }
